@@ -66,7 +66,10 @@ fn info(path: &Path) -> Result<(), Box<dyn Error>> {
         if format.supports_preview() { "да" } else { "пока нет" }
     );
 
-    if matches!(format, Format::Zip | Format::Epub) {
+    if matches!(
+        format,
+        Format::Zip | Format::Epub | Format::SevenZip | Format::Rar
+    ) {
         let entries = ogle_core::list_entries(path)?;
         let files: Vec<_> = entries.iter().filter(|entry| !entry.is_dir).collect();
         println!("Файлов внутри: {}", files.len());

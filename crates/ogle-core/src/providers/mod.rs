@@ -1,4 +1,6 @@
 pub mod archive;
+#[cfg(windows)]
+pub mod pdf;
 pub mod raster;
 
 use crate::detect::Format;
@@ -8,9 +10,23 @@ use crate::RgbaImage;
 pub fn render(request: &PreviewRequest, format: Format) -> Result<Preview, OgleError> {
     match format {
         Format::Image => raster::render(request, format),
-        Format::Zip | Format::Epub => archive::render(request),
+        Format::Zip | Format::Epub => archive::zip::render(request),
+        Format::SevenZip => archive::sevenz::render(request),
+        Format::Rar => archive::rar::render(request),
+        Format::Pdf => render_pdf(request),
         other => Err(OgleError::Unsupported(other.label().to_string())),
     }
+}
+
+#[cfg(windows)]
+fn render_pdf(request: &PreviewRequest) -> Result<Preview, OgleError> {
+    pdf::render(request)
+}
+
+#[cfg(not(windows))]
+fn render_pdf(request: &PreviewRequest) -> Result<Preview, OgleError> {
+    let _ = request;
+    Err(OgleError::Unsupported("PDF (только Windows)".to_string()))
 }
 
 /// Вписать изображение в квадрат `max` с сохранением пропорций и без апскейла.

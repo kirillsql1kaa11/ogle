@@ -1,33 +1,48 @@
 # Ogle
 
-Превью содержимого файлов прямо в Проводнике Windows — без распаковки и открытия.
+Превью содержимого файлов прямо в Проводнике Windows — без распаковки и открытия. Плюс иконка в трее со статусом.
 
-Ogle смотрит внутрь архива, книги или картинки и отдаёт Проводнику готовую миниатюру. Ядро написано на Rust, интеграция — нативная COM-обёртка `IThumbnailProvider`.
+Ядро на Rust, интеграция — нативная COM-обёртка `IThumbnailProvider`, PDF рисуется системным `Windows.Data.Pdf` (без pdfium и внешних DLL).
 
-## Статус MVP
+## Возможности
 
 | Формат | Превью | Как |
 |---|---|---|
 | ZIP, CBZ | да | крупнейшее/cover-изображение из архива |
 | EPUB | да | обложка (cover/folder/poster) |
+| 7z | да | sevenz-rust; solid-архив читается одним проходом (лимит 1 ГБ) |
+| RAR / многотомные RAR | да | vendored unrar (C++), RAR3 + RAR5 |
+| PDF | да | первая страница через `Windows.Data.Pdf` |
 | PNG, JPEG, GIF, WebP, BMP, TIFF, ICO | да | декодирование и вписывание в рамку |
-| PSD, PDF, видео, 3D | roadmap | — |
-| RAR, 7z | roadmap | — |
+| PSD, видео, 3D | roadmap | — |
 
-Ограничения MVP: только 64-битная Windows; ZIP с методами сжатия кроме deflate/stored могут не открыться; подпись DLL отсутствует.
+Ограничения: только 64-битная Windows; ZIP с методами сжатия кроме deflate/stored могут не открыться; подпись DLL отсутствует.
+
+## Трей
+
+`ogle-tray.exe` — иконка в системном трее:
+
+- наведение показывает подсказку со статусом (установлено / не установлено);
+- левый клик — уведомление со статусом;
+- ПКМ — меню: статус, открыть папку программы, открыть README, выход.
+
+Повторный запуск не создаёт вторую иконку (мьютекс `Local\OgleTray`). Иконка восстанавливается после перезапуска Explorer.
 
 ## Архитектура
 
 ```
 crates/
-  ogle-core/   детект формата по сигнатуре + рендер превью + метаданные
+  ogle-core/   детект форматов + провайдеры превью (zip/epub, 7z, rar, pdf, raster)
   ogle-cli/    ogle info / thumb / batch — отладка без Проводника
   ogle-shell/  cdylib: IThumbnailProvider + IClassFactory, CLSID Ogle
+  ogle-tray/   Win32-трей: иконка, tooltip, меню
+assets/
+  ogle.png     иконка трея (встраивается в exe)
 scripts/
-  register.ps1 регистрация в HKCU для .zip, .cbz, .epub (без админа)
+  register.ps1 регистрация в HKCU для .zip, .cbz, .epub, .7z, .rar, .pdf
 ```
 
-Поток данных: Проводник создаёт COM-объект по CLSID → `IInitializeWithFile::Initialize(path)` → `GetThumbnail(cx)` → `ogle-core::render` → `HBITMAP` (32bpp, premultiplied alpha).
+Поток данных: Проводник создаёт COM-объект по CLSID → `IInitializeWithFile::Initialize(path)` → `GetThumbnail(cx)` → `ogle-core::render` → `HBITMAP` (32bpp, premultiplied alpha). PDF рендерится в отдельном MTA-потоке, чтобы не блокировать STA Проводника.
 
 ## Сборка
 
@@ -41,13 +56,14 @@ cargo build --release
 
 - `ogle.exe` — CLI
 - `ogle_shell.dll` — COM-провайдер
+- `ogle-tray.exe` — трей
 
 ## CLI
 
 ```powershell
 ogle info C:\path\photos.zip     # формат, размер, содержимое архива
 ogle thumb C:\path\photos.zip   # PNG рядом с файлом (*.ogle.png)
-ogle thumb book.epub -s 256 -o cover.png
+ogle thumb book.pdf -s 256 -o cover.png
 ogle batch C:\path\to\folder -s 512 -o previews
 ```
 
@@ -71,13 +87,11 @@ powershell -ExecutionPolicy Bypass -File scripts\register.ps1
 cargo test
 ```
 
-Пять тестов: сигнатуры форматов, обложка из ZIP, EPUB-детект и рендер, сохранение пропорций, архив без картинок.
+Восемь тестов: сигнатуры форматов, обложка из ZIP, EPUB-детект и рендер, сохранение пропорций, архив без картинок, 7z, PDF (WinRT), аккуратная ошибка на битом RAR.
 
 ## Roadmap
 
-- PDF (pdfium), видео-кадры (Media Foundation), 3D-превью
-- PSD: композит слоёв
-- RAR/7z через `unrar`/`sevenz-rust`
+- PSD-композит, видео-кадры (Media Foundation), 3D-превью
 - Кэш превью и настройка размера в реестре
 - Превью-панель (`IPreviewHandler`) в дополнение к миниатюрам
 - Установщик (MSI) и подпись DLL

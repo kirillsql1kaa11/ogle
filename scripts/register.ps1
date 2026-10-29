@@ -7,7 +7,7 @@ $ErrorActionPreference = "Stop"
 
 $clsid = "{a3f6d8e2-5b4c-4f1a-9d7e-2c8b1f4e6a90}"
 $thumbHandlerGuid = "{E357FCCD-A995-4576-B01F-234630154E96}"
-$extensions = @(".zip", ".cbz", ".epub")
+$extensions = @(".zip", ".cbz", ".epub", ".7z", ".rar", ".pdf")
 
 $classes = "HKCU:\Software\Classes"
 $clsidKey = Join-Path $classes "CLSID\$clsid"

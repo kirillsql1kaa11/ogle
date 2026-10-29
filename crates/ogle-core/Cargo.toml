@@ -8,4 +8,9 @@ description = "Определение форматов и рендер прев�
 [dependencies]
 image.workspace = true
 zip.workspace = true
+sevenz-rust.workspace = true
+unrar.workspace = true
 thiserror.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true

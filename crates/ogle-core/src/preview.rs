@@ -49,6 +49,10 @@ pub enum OgleError {
     Image(#[from] image::ImageError),
     #[error("формат пока не поддерживается: {0}")]
     Unsupported(String),
+    #[error("ошибка архива: {0}")]
+    Archive(String),
+    #[error("ошибка PDF: {0}")]
+    Pdf(String),
     #[error("превью недоступно: {0}")]
     NoPreview(String),
 }

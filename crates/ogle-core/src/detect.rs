@@ -33,7 +33,10 @@ impl Format {
     }
 
     pub fn supports_preview(self) -> bool {
-        matches!(self, Format::Image | Format::Zip | Format::Epub)
+        matches!(
+            self,
+            Format::Image | Format::Zip | Format::Epub | Format::SevenZip | Format::Rar | Format::Pdf
+        )
     }
 }
 

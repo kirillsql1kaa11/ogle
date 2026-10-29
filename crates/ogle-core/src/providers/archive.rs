@@ -1,5 +1,9 @@
-use std::fs::File;
-use std::io::Read;
+//! Общая логика архивных превью: сбор записей, выбор кандидатов, сборка результата.
+
+pub mod rar;
+pub mod sevenz;
+pub mod zip;
+
 use std::path::Path;
 
 use crate::detect::Format;
@@ -12,106 +16,86 @@ pub struct EntryInfo {
     pub is_dir: bool,
 }
 
+pub(crate) const MAX_CANDIDATES: usize = 12;
+pub(crate) const MAX_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
+pub(crate) const MAX_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
+
 const COVER_HINTS: [&str; 6] = ["cover", "folder", "poster", "preview", "thumb", "front"];
 const IMAGE_EXTS: [&str; 8] = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff"];
-const MAX_CANDIDATES: usize = 12;
-const MAX_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
 
 /// EPUB — это ZIP, внутри которого лежит mimetype = application/epub+zip.
 pub fn is_epub(path: &Path) -> bool {
-    let Ok(file) = File::open(path) else {
-        return false;
-    };
-    let Ok(mut archive) = zip::ZipArchive::new(file) else {
-        return false;
-    };
-    let is_epub = match archive.by_name("mimetype") {
-        Ok(mut entry) => {
-            let mut buffer = Vec::new();
-            let _ = entry.by_ref().take(64).read_to_end(&mut buffer);
-            buffer.starts_with(b"application/epub+zip")
-        }
-        Err(_) => false,
-    };
-    is_epub
+    zip::is_epub(path)
 }
 
 pub fn list_entries(path: &Path) -> Result<Vec<EntryInfo>, OgleError> {
-    let file = File::open(path)?;
-    let mut archive = zip::ZipArchive::new(file)?;
-    let mut entries = Vec::with_capacity(archive.len());
-    for index in 0..archive.len() {
-        let entry = archive.by_index(index)?;
-        entries.push(EntryInfo {
-            name: entry.name().to_string(),
-            size: entry.size(),
-            is_dir: entry.is_dir(),
-        });
+    let format = crate::detect::detect_path(path)?;
+    match format {
+        Format::Zip | Format::Epub => zip::list(path),
+        Format::SevenZip => sevenz::list(path),
+        Format::Rar => rar::list(path),
+        other => Err(OgleError::Unsupported(other.label().to_string())),
     }
-    Ok(entries)
 }
 
-fn file_name_lower(name: &str) -> &str {
-    name.rsplit('/').next().unwrap_or(name)
-}
-
-pub fn render(request: &PreviewRequest) -> Result<Preview, OgleError> {
-    let epub = is_epub(&request.path);
-    let file = File::open(&request.path)?;
-    let mut archive = zip::ZipArchive::new(file)?;
-    let total_entries = archive.len();
-
-    let mut candidates: Vec<(usize, String, u64)> = Vec::new();
-    for index in 0..archive.len() {
-        let entry = archive.by_index(index)?;
-        if entry.is_dir() {
+/// Индексы записей, которые стоит пробовать как обложку, в порядке приоритета.
+pub(crate) fn rank(entries: &[EntryInfo]) -> Vec<usize> {
+    let mut scored: Vec<(usize, u64)> = Vec::new();
+    for (index, entry) in entries.iter().enumerate() {
+        if entry.is_dir {
             continue;
         }
-        let name = entry.name().to_string();
-        let lower = name.to_ascii_lowercase();
-        let leaf = file_name_lower(&lower);
+        let lower = entry.name.replace('\\', "/").to_ascii_lowercase();
+        let leaf = lower.rsplit('/').next().unwrap_or("");
         if lower.starts_with("__macosx/") || leaf.starts_with("._") {
             continue;
         }
-        let is_image = leaf.rsplit('.').next().map(|ext| IMAGE_EXTS.contains(&ext)).unwrap_or(false);
+        let is_image = leaf
+            .rsplit('.')
+            .next()
+            .map(|ext| IMAGE_EXTS.contains(&ext))
+            .unwrap_or(false);
         if !is_image {
             continue;
         }
         let hinted = COVER_HINTS.iter().any(|hint| leaf.contains(hint));
-        let score = u64::from(hinted) * 4_000_000 + entry.size().min(1_999_999);
-        candidates.push((index, name, score));
+        let score = u64::from(hinted) * 4_000_000 + entry.size.min(1_999_999);
+        scored.push((index, score));
     }
+    scored.sort_by_key(|(_, score)| std::cmp::Reverse(*score));
+    scored
+        .into_iter()
+        .take(MAX_CANDIDATES)
+        .map(|(index, _)| index)
+        .collect()
+}
 
-    candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.2));
-    candidates.truncate(MAX_CANDIDATES);
+pub(crate) fn build_preview(
+    format: Format,
+    source: String,
+    bytes: Vec<u8>,
+    total_entries: usize,
+    request: &PreviewRequest,
+) -> Result<Preview, OgleError> {
+    let image = image::load_from_memory(&bytes)?;
+    let (width, height) = (image.width(), image.height());
+    let thumb = super::fit_within(&image.to_rgba8(), request.max_size);
+    Ok(Preview {
+        image: thumb,
+        details: PreviewDetails {
+            format,
+            source,
+            original_size: Some((width, height)),
+            notes: vec![format!("записей в архиве: {total_entries}")],
+        },
+    })
+}
 
-    for (index, name, _) in candidates {
-        let mut entry = archive.by_index(index)?;
-        if entry.size() > MAX_ENTRY_BYTES {
-            continue;
-        }
-        let mut buffer = Vec::with_capacity(entry.size() as usize);
-        entry.read_to_end(&mut buffer)?;
-        let Ok(image) = image::load_from_memory(&buffer) else {
-            continue;
-        };
-        let (width, height) = (image.width(), image.height());
-        let thumb = super::fit_within(&image.to_rgba8(), request.max_size);
-        let format = if epub { Format::Epub } else { Format::Zip };
-        return Ok(Preview {
-            image: thumb,
-            details: PreviewDetails {
-                format,
-                source: name,
-                original_size: Some((width, height)),
-                notes: vec![format!("записей в архиве: {total_entries}")],
-            },
-        });
-    }
-
-    Err(OgleError::NoPreview(if epub {
-        "в EPUB не найдено изображение обложки".to_string()
-    } else {
-        "в архиве нет изображений".to_string()
-    }))
+pub(crate) fn no_images(format: Format) -> OgleError {
+    OgleError::NoPreview(match format {
+        Format::Epub => "в EPUB не найдено изображение обложки".to_string(),
+        Format::Rar => "в RAR-архиве нет изображений".to_string(),
+        Format::SevenZip => "в 7z-архиве нет изображений".to_string(),
+        _ => "в архиве нет изображений".to_string(),
+    })
 }
