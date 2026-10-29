@@ -1,0 +1,14 @@
+[package]
+name = "ogle-shell"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "COM thumbnail provider для Проводника Windows"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+ogle-core.workspace = true
+windows.workspace = true
+windows-core.workspace = true

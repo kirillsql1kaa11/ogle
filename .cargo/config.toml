@@ -1,0 +1,4 @@
+# Проект лежит в OneDrive: артефакты сборки вынесены наружу,
+# чтобы синхронизация не трогала гигабайты target и не лочила файлы.
+[build]
+target-dir = "C:/Users/kira0/AppData/Local/ogle-target"

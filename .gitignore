@@ -1,0 +1,6 @@
+/target/
+/previews/
+*.ogle.png
+*.pdb
+
+/dist/

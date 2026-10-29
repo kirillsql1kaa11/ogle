@@ -1,0 +1,30 @@
+[workspace]
+resolver = "2"
+members = ["crates/ogle-core", "crates/ogle-cli", "crates/ogle-shell"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Kirill"]
+
+[workspace.dependencies]
+ogle-core = { path = "crates/ogle-core" }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "tiff", "ico"] }
+zip = { version = "2.6", default-features = false, features = ["deflate"] }
+thiserror = "2"
+clap = { version = "4", features = ["derive"] }
+windows = { version = "0.58", features = [
+    "implement",
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_PropertiesSystem",
+] }
+windows-core = "0.58"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

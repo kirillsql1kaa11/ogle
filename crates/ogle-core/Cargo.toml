@@ -1,0 +1,11 @@
+[package]
+name = "ogle-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Определение форматов и рендер превью без извлечения файлов"
+
+[dependencies]
+image.workspace = true
+zip.workspace = true
+thiserror.workspace = true

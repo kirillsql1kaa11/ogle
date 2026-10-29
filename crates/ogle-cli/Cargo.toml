@@ -1,0 +1,14 @@
+[package]
+name = "ogle-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CLI для отладки превью Ogle"
+
+[[bin]]
+name = "ogle"
+path = "src/main.rs"
+
+[dependencies]
+ogle-core.workspace = true
+clap.workspace = true
