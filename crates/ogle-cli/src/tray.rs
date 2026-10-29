@@ -1,73 +1,57 @@
-#![cfg(windows)]
-#![windows_subsystem = "windows"]
-
-//! Ogle в системном трее: иконка, статус по наведению, быстрые действия.
-
 use std::ffi::c_void;
 use std::mem::size_of;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::OnceLock;
 
 use windows::core::{w, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{
-    GetLastError, BOOL, ERROR_ALREADY_EXISTS, ERROR_SUCCESS, HANDLE, HINSTANCE, HWND, LPARAM,
-    LRESULT, POINT, WPARAM,
+    GetLastError, SetLastError, BOOL, ERROR_ALREADY_EXISTS, ERROR_SUCCESS, HANDLE, HINSTANCE, HWND,
+    LPARAM, LRESULT, POINT, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
     CreateBitmap, CreateDIBSection, DeleteObject, GetDC, ReleaseDC, BITMAPINFO, BITMAPINFOHEADER,
-    HGDIOBJ, BI_RGB, DIB_RGB_COLORS,
+    BI_RGB, DIB_RGB_COLORS, HGDIOBJ,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::Registry::{
-    RegCloseKey, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, KEY_READ,
-};
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::Shell::{
-    Shell_NotifyIconW, ShellExecuteW, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_INFO,
-    NIIF_WARNING, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
+    Shell_NotifyIconW, ShellExecuteW, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_ERROR,
+    NIIF_INFO, NIIF_WARNING, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconIndirect, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
-    DestroyMenu, DestroyWindow, DispatchMessageW, GetCursorPos, GetMessageW, MessageBoxW, HICON,
-    HMENU, ICONINFO, MB_ICONERROR, MB_OK, MF_SEPARATOR, MF_STRING, MSG, PostMessageW,
-    PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SW_SHOWNORMAL, SetForegroundWindow,
-    TPM_NONOTIFY, TPM_RETURNCMD, TrackPopupMenu, TranslateMessage, WM_APP, WM_DESTROY,
-    WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WNDCLASSW, WS_OVERLAPPED,
+    DestroyMenu, DestroyWindow, DispatchMessageW, FindWindowW, GetCursorPos, GetMessageW, HICON,
+    HMENU, ICONINFO, MF_CHECKED, MF_SEPARATOR, MF_STRING, MSG, PostMessageW, PostQuitMessage,
+    RegisterClassW, RegisterWindowMessageW, SW_SHOWNORMAL, SetForegroundWindow, TPM_NONOTIFY,
+    TPM_RETURNCMD, TrackPopupMenu, TranslateMessage, WM_APP, WM_CLOSE, WM_DESTROY, WM_LBUTTONUP,
+    WM_NULL, WM_RBUTTONUP, WNDCLASSW, WS_OVERLAPPED,
 };
+
+use crate::app;
 
 const WM_TRAY: u32 = WM_APP + 1;
 const MENU_STATUS: usize = 1;
-const MENU_FOLDER: usize = 2;
-const MENU_README: usize = 3;
-const MENU_EXIT: usize = 4;
-const CLSID_OGLE: &str = "a3f6d8e2-5b4c-4f1a-9d7e-2c8b1f4e6a90";
+const MENU_REGISTER: usize = 2;
+const MENU_UNREGISTER: usize = 3;
+const MENU_AUTOSTART: usize = 4;
+const MENU_FOLDER: usize = 5;
+const MENU_README: usize = 6;
+const MENU_EXIT: usize = 7;
 const ICON_SIZE: i32 = 32;
 
 static ICON_HANDLE: AtomicIsize = AtomicIsize::new(0);
 static TASKBAR_CREATED: OnceLock<u32> = OnceLock::new();
 
-fn main() {
-    if let Err(error) = run() {
-        unsafe {
-            let text = HSTRING::from(error.as_str());
-            MessageBoxW(
-                HWND::default(),
-                &text,
-                w!("Ogle"),
-                MB_OK | MB_ICONERROR,
-            );
-        }
-    }
-}
-
-fn run() -> Result<(), String> {
+pub fn run() -> Result<(), String> {
     unsafe {
-        let _mutex = CreateMutexW(None, BOOL(1), w!("Local\\OgleTray"))
+        SetLastError(ERROR_SUCCESS);
+        let _mutex = CreateMutexW(None, BOOL(1), w!("Local\\OgleApp"))
             .map_err(|error| error.message())?;
         if GetLastError() == ERROR_ALREADY_EXISTS {
             return Ok(());
         }
+
+        let legacy_closed = close_legacy_tray();
 
         let instance = GetModuleHandleW(None).map_err(|error| error.message())?;
         let class_name = w!("OgleTrayWindow");
@@ -99,7 +83,17 @@ fn run() -> Result<(), String> {
 
         let icon = create_icon().ok_or_else(|| "не удалось создать иконку".to_string())?;
         ICON_HANDLE.store(icon.0 as isize, Ordering::SeqCst);
-        add_tray(hwnd, icon.0 as isize);
+        if !add_tray(hwnd, icon.0 as isize) {
+            return Err("не удалось добавить иконку в трей".to_string());
+        }
+        if !legacy_closed {
+            app::alert_info(
+                "Ogle",
+                "В системе запущен старый ogle-tray.exe (0.2.0) с правами администратора.\n\
+                 Закройте его: ПКМ по его иконке в трее → «Выход».\n\
+                 Новая версия уже работает.",
+            );
+        }
 
         let mut message = MSG::default();
         while GetMessageW(&mut message, HWND::default(), 0, 0).0 > 0 {
@@ -127,7 +121,7 @@ unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         _ if message == taskbar_created() => {
-            add_tray(hwnd, icon);
+            let _ = add_tray(hwnd, icon);
             LRESULT(0)
         }
         WM_DESTROY => {
@@ -136,6 +130,25 @@ unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, message, wparam, lparam),
+    }
+}
+
+fn close_legacy_tray() -> bool {
+    unsafe {
+        let class_name = w!("OgleTrayWindow");
+        let Ok(hwnd) = FindWindowW(class_name, PCWSTR::null()) else {
+            return true;
+        };
+        if PostMessageW(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0)).is_err() {
+            return false;
+        }
+        for _ in 0..20 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            if FindWindowW(class_name, PCWSTR::null()).is_err() {
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -153,10 +166,10 @@ fn fill_wide(destination: &mut [u16], text: &str) {
 }
 
 fn tray_tip() -> &'static str {
-    if is_registered() {
+    if app::is_registered() {
         "Ogle — превью включены: ZIP, CBZ, EPUB, 7z, RAR, PDF"
     } else {
-        "Ogle — не установлен. ПКМ → меню"
+        "Ogle — превью выключены. ПКМ → меню"
     }
 }
 
@@ -174,11 +187,9 @@ fn tray_data(hwnd: HWND, icon: isize) -> NOTIFYICONDATAW {
     data
 }
 
-fn add_tray(hwnd: HWND, icon: isize) {
+fn add_tray(hwnd: HWND, icon: isize) -> bool {
     let data = tray_data(hwnd, icon);
-    unsafe {
-        let _ = Shell_NotifyIconW(NIM_ADD, &data);
-    }
+    unsafe { Shell_NotifyIconW(NIM_ADD, &data).as_bool() }
 }
 
 fn remove_tray(hwnd: HWND, icon: isize) {
@@ -188,8 +199,15 @@ fn remove_tray(hwnd: HWND, icon: isize) {
     }
 }
 
+fn refresh(hwnd: HWND, icon: isize) {
+    let data = tray_data(hwnd, icon);
+    unsafe {
+        let _ = Shell_NotifyIconW(NIM_MODIFY, &data);
+    }
+}
+
 fn show_status(hwnd: HWND, icon: isize) {
-    let registered = is_registered();
+    let registered = app::is_registered();
     let mut data = tray_data(hwnd, icon);
     data.uFlags = NIF_INFO;
     data.dwInfoFlags = if registered { NIIF_INFO } else { NIIF_WARNING };
@@ -199,9 +217,29 @@ fn show_status(hwnd: HWND, icon: isize) {
         if registered {
             "Превью включены: ZIP, CBZ, EPUB, 7z, RAR, PDF"
         } else {
-            "Провайдер не зарегистрирован. Запустите register.ps1 из папки программы."
+            "Превью выключены. ПКМ → «Перерегистрировать»."
         },
     );
+    unsafe {
+        let _ = Shell_NotifyIconW(NIM_MODIFY, &data);
+    }
+}
+
+fn notify_result(hwnd: HWND, icon: isize, error: Option<String>) {
+    let mut data = tray_data(hwnd, icon);
+    data.uFlags = NIF_INFO;
+    match error {
+        Some(error) => {
+            data.dwInfoFlags = NIIF_ERROR;
+            fill_wide(&mut data.szInfoTitle, "Ogle — ошибка");
+            fill_wide(&mut data.szInfo, &error);
+        }
+        None => {
+            data.dwInfoFlags = NIIF_INFO;
+            fill_wide(&mut data.szInfoTitle, "Ogle");
+            fill_wide(&mut data.szInfo, "Готово");
+        }
+    }
     unsafe {
         let _ = Shell_NotifyIconW(NIM_MODIFY, &data);
     }
@@ -212,13 +250,30 @@ fn show_menu(hwnd: HWND, icon: isize) {
         let Ok(menu) = CreatePopupMenu() else {
             return;
         };
-        let status_label = if is_registered() {
-            "Статус: установлено"
+
+        let status_text = HSTRING::from(if app::is_registered() {
+            "Статус: превью включены"
         } else {
-            "Статус: не установлено"
-        };
-        let status_text = HSTRING::from(status_label);
+            "Статус: превью выключены"
+        });
+        let register_text = HSTRING::from(if app::is_registered() {
+            "Перерегистрировать"
+        } else {
+            "Включить превью"
+        });
+        let autostart_text = HSTRING::from("Запускать при входе");
+
         let _ = AppendMenuW(menu, MF_STRING, MENU_STATUS, &status_text);
+        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+        let _ = AppendMenuW(menu, MF_STRING, MENU_REGISTER, &register_text);
+        let _ = AppendMenuW(menu, MF_STRING, MENU_UNREGISTER, w!("Отключить превью"));
+        let autostart_flags = if app::autostart_enabled() {
+            MF_STRING | MF_CHECKED
+        } else {
+            MF_STRING
+        };
+        let _ = AppendMenuW(menu, autostart_flags, MENU_AUTOSTART, &autostart_text);
+        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         let _ = AppendMenuW(menu, MF_STRING, MENU_FOLDER, w!("Открыть папку программы"));
         let _ = AppendMenuW(menu, MF_STRING, MENU_README, w!("Открыть README"));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
@@ -241,8 +296,22 @@ fn show_menu(hwnd: HWND, icon: isize) {
 
         match command.0 as usize {
             MENU_STATUS => show_status(hwnd, icon),
+            MENU_REGISTER => {
+                let result = app::install().map(|_| ());
+                notify_result(hwnd, icon, result.err());
+                refresh(hwnd, icon);
+            }
+            MENU_UNREGISTER => {
+                let result = app::uninstall();
+                notify_result(hwnd, icon, result.err());
+                refresh(hwnd, icon);
+            }
+            MENU_AUTOSTART => {
+                let result = app::set_autostart(!app::autostart_enabled());
+                notify_result(hwnd, icon, result.err());
+            }
             MENU_FOLDER => {
-                if let Some(directory) = program_dir() {
+                if let Some(directory) = app::program_dir() {
                     open_path(&directory.to_string_lossy());
                 }
             }
@@ -256,29 +325,8 @@ fn show_menu(hwnd: HWND, icon: isize) {
     }
 }
 
-fn is_registered() -> bool {
-    let subkey = HSTRING::from(format!(r"Software\Classes\CLSID\{{{CLSID_OGLE}}}"));
-    let mut key = HKEY::default();
-    let result = unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, &subkey, 0, KEY_READ, &mut key) };
-    if result == ERROR_SUCCESS {
-        unsafe {
-            let _ = RegCloseKey(key);
-        }
-        true
-    } else {
-        false
-    }
-}
-
-fn program_dir() -> Option<PathBuf> {
-    std::env::current_exe()
-        .ok()?
-        .parent()
-        .map(|parent| parent.to_path_buf())
-}
-
 fn open_readme() {
-    if let Some(directory) = program_dir() {
+    if let Some(directory) = app::program_dir() {
         let readme = directory.join("README.md");
         if readme.exists() {
             open_path(&readme.to_string_lossy());
@@ -302,7 +350,6 @@ fn open_path(target: &str) {
     }
 }
 
-/// Иконка трея из встроенного PNG: RGBA -> 32bpp DIB + маска.
 fn create_icon() -> Option<HICON> {
     let bytes = include_bytes!("../../../assets/ogle.png");
     let image = image::load_from_memory(bytes)
@@ -338,10 +385,7 @@ fn create_icon() -> Option<HICON> {
     unsafe { ReleaseDC(HWND::default(), hdc) };
 
     let pixels = unsafe {
-        std::slice::from_raw_parts_mut(
-            bits as *mut u8,
-            (ICON_SIZE * ICON_SIZE * 4) as usize,
-        )
+        std::slice::from_raw_parts_mut(bits as *mut u8, (ICON_SIZE * ICON_SIZE * 4) as usize)
     };
     for (index, pixel) in image.pixels().enumerate() {
         let alpha = pixel[3] as u32;

@@ -3,7 +3,7 @@ name = "ogle-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "CLI для отладки превью Ogle"
+description = "Ogle — единый exe: CLI, установка превью и трей"
 
 [[bin]]
 name = "ogle"
@@ -12,3 +12,5 @@ path = "src/main.rs"
 [dependencies]
 ogle-core.workspace = true
 clap.workspace = true
+image.workspace = true
+windows.workspace = true

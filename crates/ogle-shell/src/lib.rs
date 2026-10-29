@@ -1,9 +1,7 @@
 #![cfg(windows)]
 
-//! In-proc COM-сервер: IThumbnailProvider для Проводника.
-//! Регистрация — scripts/register.ps1 (HKCU, без администратора).
-
 use std::ffi::c_void;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::OnceLock;
@@ -67,14 +65,21 @@ impl IThumbnailProvider_Impl for ThumbnailProvider_Impl {
             return Err(Error::from(E_POINTER));
         }
         let path = self.path.get().cloned().ok_or_else(|| Error::from(E_FAIL))?;
-        let preview = render(&PreviewRequest::new(path).max_size(cx.clamp(64, 1024)))
-            .map_err(|_| Error::from(E_FAIL))?;
-        let bitmap = rgba_to_hbitmap(&preview.image)?;
-        unsafe {
-            *phbmp = bitmap;
-            *pdwalpha = WTSAT_ARGB;
+        let rendered = catch_unwind(AssertUnwindSafe(|| {
+            let preview = render(&PreviewRequest::new(path).max_size(cx.clamp(64, 1024)))
+                .map_err(|_| Error::from(E_FAIL))?;
+            rgba_to_hbitmap(&preview.image)
+        }));
+        match rendered {
+            Ok(Ok(bitmap)) => {
+                unsafe {
+                    *phbmp = bitmap;
+                    *pdwalpha = WTSAT_ARGB;
+                }
+                Ok(())
+            }
+            _ => Err(Error::from(E_FAIL)),
         }
-        Ok(())
     }
 }
 

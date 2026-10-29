@@ -1,3 +1,9 @@
+#![windows_subsystem = "windows"]
+
+mod app;
+mod console;
+mod tray;
+
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -38,7 +44,57 @@ enum Command {
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let args: Vec<String> = std::env::args().skip(1).collect();
+
+    if args.is_empty() {
+        return match app::launch() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                app::alert_error("Ogle — ошибка", &error);
+                ExitCode::FAILURE
+            }
+        };
+    }
+
+    match args[0].as_str() {
+        "--install" | "-i" => match app::install() {
+            Ok(_) => {
+                app::alert_info(
+                    "Ogle",
+                    "Превью включены: ZIP, CBZ, EPUB, 7z, RAR, PDF.\nЕсли миниатюры не появились — перезапустите Проводник.",
+                );
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                app::alert_error("Ogle — ошибка", &error);
+                ExitCode::FAILURE
+            }
+        },
+        "--uninstall" | "-u" => match app::uninstall() {
+            Ok(()) => {
+                app::alert_info("Ogle", "Превью отключены.");
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                app::alert_error("Ogle — ошибка", &error);
+                ExitCode::FAILURE
+            }
+        },
+        _ => run_cli(),
+    }
+}
+
+fn run_cli() -> ExitCode {
+    console::attach();
+
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(error) => {
+            let _ = error.print();
+            return ExitCode::from(2);
+        }
+    };
+
     let result = match cli.command {
         Command::Info { path } => info(&path),
         Command::Thumb { path, size, out } => thumb(&path, size, out),

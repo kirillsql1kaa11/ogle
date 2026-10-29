@@ -1,8 +1,21 @@
 # Ogle
 
-Превью содержимого файлов прямо в Проводнике Windows — без распаковки и открытия. Плюс иконка в трее со статусом.
+Превью архивов, книг и документов прямо в Проводнике Windows — без распаковки и без открытия файла. Один `ogle.exe`: он же устанавливает провайдер превью, он же показывает иконку в трее.
 
-Ядро на Rust, интеграция — нативная COM-обёртка `IThumbnailProvider`, PDF рисуется системным `Windows.Data.Pdf` (без pdfium и внешних DLL).
+## Быстрый старт
+
+1. Положите `ogle.exe` в любую папку.
+2. Двойной клик.
+
+Всё. Провайдер зарегистрирован в `HKCU` (права администратора не нужны), иконка Ogle появилась в трее.
+
+Если миниатюры не появились сразу — перезапустите Проводник (Диспетчер задач → «Проводник» → «Перезапустить»). Кэш миниатюр при необходимости сбрасывается через «Очистку диска» → «Эскизы».
+
+## Что делает запуск
+
+- распаковывает встроенный `ogle_shell.dll` в `%LOCALAPPDATA%\Ogle\` под именем с хешем содержимого;
+- прописывает CLSID и ShellEx-обработчики для `.zip`, `.cbz`, `.epub`, `.7z`, `.rar`, `.pdf`;
+- запускает трей (один экземпляр, повторный запуск ничего не дублирует).
 
 ## Возможности
 
@@ -16,70 +29,65 @@
 | PNG, JPEG, GIF, WebP, BMP, TIFF, ICO | да | декодирование и вписывание в рамку |
 | PSD, видео, 3D | roadmap | — |
 
-Ограничения: только 64-битная Windows; ZIP с методами сжатия кроме deflate/stored могут не открыться; подпись DLL отсутствует.
-
 ## Трей
 
-`ogle-tray.exe` — иконка в системном трее:
-
-- наведение показывает подсказку со статусом (установлено / не установлено);
+- наведение — подсказка со статусом (включено / выключено);
 - левый клик — уведомление со статусом;
-- ПКМ — меню: статус, открыть папку программы, открыть README, выход.
+- ПКМ — меню: статус, включить/перерегистрировать превью, отключить превью, «Запускать при входе», папка программы, README, выход.
 
-Повторный запуск не создаёт вторую иконку (мьютекс `Local\OgleTray`). Иконка восстанавливается после перезапуска Explorer.
+Иконка восстанавливается после перезапуска Проводника.
+
+## Флаги
+
+```powershell
+ogle.exe              # установить превью и запустить трей
+ogle.exe --install    # только установить/перерегистрировать
+ogle.exe --uninstall  # отключить превью
+```
+
+## CLI для отладки
+
+```powershell
+ogle info C:\path\photos.zip     # формат, размер, содержимое архива
+ogle thumb C:\path\photos.zip    # PNG рядом с файлом (*.ogle.png)
+ogle thumb book.pdf -s 256 -o cover.png
+ogle batch C:\path\to\folder -s 512 -o previews
+```
+
+CLI работает и без установки — достаточно самого exe.
 
 ## Архитектура
 
 ```
 crates/
   ogle-core/   детект форматов + провайдеры превью (zip/epub, 7z, rar, pdf, raster)
-  ogle-cli/    ogle info / thumb / batch — отладка без Проводника
+  ogle-cli/    bin ogle: CLI + установка в реестр + трей
   ogle-shell/  cdylib: IThumbnailProvider + IClassFactory, CLSID Ogle
-  ogle-tray/   Win32-трей: иконка, tooltip, меню
 assets/
   ogle.png     иконка трея (встраивается в exe)
-scripts/
-  register.ps1 регистрация в HKCU для .zip, .cbz, .epub, .7z, .rar, .pdf
 ```
 
-Поток данных: Проводник создаёт COM-объект по CLSID → `IInitializeWithFile::Initialize(path)` → `GetThumbnail(cx)` → `ogle-core::render` → `HBITMAP` (32bpp, premultiplied alpha). PDF рендерится в отдельном MTA-потоке, чтобы не блокировать STA Проводника.
+Поток данных: Проводник создаёт COM-объект по CLSID → `IInitializeWithFile::Initialize(path)` → `GetThumbnail(cx)` → `ogle-core::render` → `HBITMAP` (32bpp, premultiplied alpha). PDF рендерится в отдельном MTA-потоке, чтобы не блокировать STA Проводника. Регистрация — только `HKCU`, весь пользовательский профиль.
+
+Обработчик регистрируется с `DisableProcessIsolation = 1`: изолированный процесс-суррогат Windows 11 не подхватывает пользовательскую регистрацию из `HKCU`, поэтому DLL грузится прямо в Проводник. Паника внутри `GetThumbnail` перехватывается и превращается в ошибку, чтобы не уронить shell.
 
 ## Сборка
 
 ```powershell
-cargo build --release
+cargo build --release -p ogle-shell
+$env:OGLE_EMBED_SHELL="1"; cargo build --release -p ogle-cli
+Remove-Item Env:\OGLE_EMBED_SHELL
 ```
 
-Артефакты кладутся в `C:\Users\<user>\AppData\Local\ogle-target\release\` — путь задан в `.cargo/config.toml`, чтобы OneDrive не синхронизировал `target/`. Поменяйте его на свой при переносе проекта.
+Готовый `ogle.exe` — в `C:\Users\<user>\AppData\Local\ogle-target\release\` (путь задан в `.cargo/config.toml`, чтобы OneDrive не синхронизировал `target/`). Без `OGLE_EMBED_SHELL` exe собирается без встроенной DLL и ищет `ogle_shell.dll` рядом с собой.
 
-Результат:
+## Обновление
 
-- `ogle.exe` — CLI
-- `ogle_shell.dll` — COM-провайдер
-- `ogle-tray.exe` — трей
+Запустите новый `ogle.exe`. DLL распаковывается под новым именем, реестр переключается на неё, старые файлы удаляются. Заблокированную Проводником старую DLL система удалит при следующем запуске.
 
-## CLI
+## Удаление
 
-```powershell
-ogle info C:\path\photos.zip     # формат, размер, содержимое архива
-ogle thumb C:\path\photos.zip   # PNG рядом с файлом (*.ogle.png)
-ogle thumb book.pdf -s 256 -o cover.png
-ogle batch C:\path\to\folder -s 512 -o previews
-```
-
-## Установка в Проводник
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\register.ps1
-```
-
-Скрипт прописывает CLSID и ShellEx-хендлеры в `HKCU\Software\Classes` (права администратора не нужны). После установки:
-
-1. Перезапустите Explorer, чтобы он подхватил DLL.
-2. Сбросьте кэш миниатюр: `ie4uinit.exe -show`.
-3. Отключение: `powershell -File scripts\register.ps1 -Unregister`.
-
-Если миниатюры не появились: проверьте, что DLL — release-сборка и 64-битная (Explorer на x64 грузит только x64-провайдеры), и что путь в `InprocServer32` указывает на существующий файл.
+ПКМ по иконке → «Отключить превью», затем удалите `ogle.exe` и папку `%LOCALAPPDATA%\Ogle`. Автозапуск отключается в том же меню (или удалите значение `Ogle` в `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`).
 
 ## Тесты
 
@@ -89,12 +97,11 @@ cargo test
 
 Восемь тестов: сигнатуры форматов, обложка из ZIP, EPUB-детект и рендер, сохранение пропорций, архив без картинок, 7z, PDF (WinRT), аккуратная ошибка на битом RAR.
 
-## Roadmap
+## Ограничения
 
-- PSD-композит, видео-кадры (Media Foundation), 3D-превью
-- Кэш превью и настройка размера в реестре
-- Превью-панель (`IPreviewHandler`) в дополнение к миниатюрам
-- Установщик (MSI) и подпись DLL
+- только 64-битная Windows;
+- ZIP с методами сжатия кроме deflate/stored могут не открыться;
+- цифровой подписи нет — SmartScreen может предупредить при скачивании.
 
 ## Лицензия
 
