@@ -2,6 +2,7 @@
 
 mod app;
 mod console;
+mod hover;
 mod tray;
 
 use std::error::Error;
@@ -44,6 +45,12 @@ enum Command {
 }
 
 fn main() -> ExitCode {
+    unsafe {
+        let _ = windows::Win32::UI::HiDpi::SetProcessDpiAwarenessContext(
+            windows::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+        );
+    }
+
     let args: Vec<String> = std::env::args().skip(1).collect();
 
     if args.is_empty() {
@@ -90,7 +97,16 @@ fn run_cli() -> ExitCode {
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
         Err(error) => {
+            let displayed = matches!(
+                error.kind(),
+                clap::error::ErrorKind::DisplayHelp
+                    | clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+                    | clap::error::ErrorKind::DisplayVersion
+            );
             let _ = error.print();
+            if displayed {
+                return ExitCode::SUCCESS;
+            }
             return ExitCode::from(2);
         }
     };

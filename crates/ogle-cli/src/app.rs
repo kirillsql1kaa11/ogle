@@ -32,6 +32,7 @@ const EMBEDDED_DLL: &[u8] = &[];
 
 pub fn launch() -> Result<(), String> {
     install()?;
+    crate::hover::start();
     tray::run()
 }
 
@@ -110,6 +111,44 @@ pub fn set_autostart(enabled: bool) -> Result<(), String> {
     } else {
         delete_value(RUN_KEY, RUN_VALUE);
         Ok(())
+    }
+}
+
+pub fn hover_enabled() -> bool {
+    read_dword(r"Software\Ogle", "HoverPreview").unwrap_or(1) != 0
+}
+
+pub fn set_hover(enabled: bool) {
+    let _ = set_dword(r"Software\Ogle", "HoverPreview", u32::from(enabled));
+}
+
+fn read_dword(path: &str, name: &str) -> Option<u32> {
+    unsafe {
+        let path_wide = wide(path);
+        let mut key = HKEY::default();
+        if RegOpenKeyExW(HKEY_CURRENT_USER, PCWSTR(path_wide.as_ptr()), 0, KEY_READ, &mut key)
+            != ERROR_SUCCESS
+        {
+            return None;
+        }
+        let name_wide = wide(name);
+        let mut kind = REG_DWORD;
+        let mut value = 0u32;
+        let mut size = 4u32;
+        let status = RegQueryValueExW(
+            key,
+            PCWSTR(name_wide.as_ptr()),
+            None,
+            Some(&mut kind),
+            Some(&mut value as *mut u32 as *mut u8),
+            Some(&mut size),
+        );
+        let _ = RegCloseKey(key);
+        if status == ERROR_SUCCESS && kind == REG_DWORD {
+            Some(value)
+        } else {
+            None
+        }
     }
 }
 

@@ -34,9 +34,10 @@ const MENU_STATUS: usize = 1;
 const MENU_REGISTER: usize = 2;
 const MENU_UNREGISTER: usize = 3;
 const MENU_AUTOSTART: usize = 4;
-const MENU_FOLDER: usize = 5;
-const MENU_README: usize = 6;
-const MENU_EXIT: usize = 7;
+const MENU_HOVER: usize = 5;
+const MENU_FOLDER: usize = 6;
+const MENU_README: usize = 7;
+const MENU_EXIT: usize = 8;
 const ICON_SIZE: i32 = 32;
 
 static ICON_HANDLE: AtomicIsize = AtomicIsize::new(0);
@@ -262,11 +263,18 @@ fn show_menu(hwnd: HWND, icon: isize) {
             "Включить превью"
         });
         let autostart_text = HSTRING::from("Запускать при входе");
+        let hover_text = HSTRING::from("Превью при наведении");
 
         let _ = AppendMenuW(menu, MF_STRING, MENU_STATUS, &status_text);
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         let _ = AppendMenuW(menu, MF_STRING, MENU_REGISTER, &register_text);
         let _ = AppendMenuW(menu, MF_STRING, MENU_UNREGISTER, w!("Отключить превью"));
+        let hover_flags = if crate::hover::HOVER_ENABLED.load(Ordering::Relaxed) {
+            MF_STRING | MF_CHECKED
+        } else {
+            MF_STRING
+        };
+        let _ = AppendMenuW(menu, hover_flags, MENU_HOVER, &hover_text);
         let autostart_flags = if app::autostart_enabled() {
             MF_STRING | MF_CHECKED
         } else {
@@ -309,6 +317,12 @@ fn show_menu(hwnd: HWND, icon: isize) {
             MENU_AUTOSTART => {
                 let result = app::set_autostart(!app::autostart_enabled());
                 notify_result(hwnd, icon, result.err());
+            }
+            MENU_HOVER => {
+                let enabled = !crate::hover::HOVER_ENABLED.load(Ordering::Relaxed);
+                crate::hover::HOVER_ENABLED.store(enabled, Ordering::Relaxed);
+                app::set_hover(enabled);
+                notify_result(hwnd, icon, None);
             }
             MENU_FOLDER => {
                 if let Some(directory) = app::program_dir() {

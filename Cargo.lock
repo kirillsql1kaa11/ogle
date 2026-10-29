@@ -561,7 +561,7 @@ dependencies = [
 
 [[package]]
 name = "ogle-cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "clap",
  "image",
@@ -571,7 +571,7 @@ dependencies = [
 
 [[package]]
 name = "ogle-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "image",
  "sevenz-rust",
@@ -583,7 +583,7 @@ dependencies = [
 
 [[package]]
 name = "ogle-shell"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "ogle-core",
  "windows",
